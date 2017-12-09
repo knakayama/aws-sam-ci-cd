@@ -1,0 +1,8 @@
+/.venv/
+/tmp/
+.envrc
+__pycache__/
+.sam/*
+!.sam/.gitkeep
+.cache/
+vendored/

@@ -1,0 +1,46 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: AWS SAM CI CD
+
+Parameters:
+  Env:
+    Type: String
+  MemorySize:
+    Type: Number
+
+Resources:
+  BucketOrigin:
+    Type: AWS::S3::Bucket
+
+  FileProcessor:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: file-processor
+      CodeUri: src/handlers/file_processor
+      Handler: index.handler
+      Runtime: python3.6
+      MemorySize: !Ref MemorySize
+      AutoPublishAlias: live
+      Role:
+        Fn::ImportValue: !Sub ${AWS::StackName}-iam-FileProcessorRoleArn
+      Environment:
+        Variables:
+          BUCKET_PROCESSED:
+            Fn::ImportValue: !Sub ${AWS::StackName}-s3-BucketOriginName
+      Events:
+        Origin:
+          Type: S3
+          Properties:
+            Bucket: !Ref BucketOrigin
+            Events: s3:ObjectCreated:*
+      Tags:
+        Env: !Ref Env
+
+Outputs:
+  BucketOriginName:
+    Value: !Ref BucketOrigin
+
+  BucketProcessedName:
+    Value:
+      Fn::ImportValue: !Sub ${AWS::StackName}-s3-BucketOriginName

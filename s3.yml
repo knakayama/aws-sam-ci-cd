@@ -1,0 +1,13 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: AWS SAM CI CD - S3
+
+Resources:
+  BucketProcessed:
+    Type: AWS::S3::Bucket
+
+Outputs:
+  BucketProcessedName:
+    Value: !Ref BucketProcessed
+    Export:
+      Name: !Sub ${AWS::StackName}-BucketOriginName

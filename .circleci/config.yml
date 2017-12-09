@@ -1,0 +1,166 @@
+version: 2
+
+references:
+  guess_build_and_deploy_container: &guess_build_and_deploy_container
+    docker:
+      - image: circleci/python:3.6.1
+
+  unit_test_container: &unit_test_container
+    docker:
+      - image: circleci/python:3.6.1
+      - image: localstack/localstack
+
+  setup_remote_docker: &setup_remote_docker
+    setup_remote_docker:
+      version: 17.11.0-ce
+
+  workspace_envs: &workspace_envs
+    ./
+
+  persist_to_workspace_envs: &persist_to_workspace_envs
+    persist_to_workspace:
+      root: *workspace_envs
+      paths:
+        - envs.sh
+
+  workspace_artifacts: &workspace_artifacts
+    ./
+
+  persist_to_workspace_artifacts: &persist_to_workspace_artifacts
+    persist_to_workspace:
+      root: *workspace_artifacts
+      paths:
+        - .sam/sam_packaged.yml
+        - src/handlers/file_processor/vendored/*
+
+jobs:
+  guess_and_save_envs:
+    <<: *guess_build_and_deploy_container
+    steps:
+      - checkout
+      - run:
+          name: Guess and save envs
+          command: |
+            set -x
+
+            ./guess.sh
+      - <<: *persist_to_workspace_envs
+
+  build:
+    <<: *guess_build_and_deploy_container
+    steps:
+      - checkout
+      - <<: *setup_remote_docker
+      - attach_workspace:
+          at: *workspace_envs
+      - restore_cache:
+          keys:
+            - v1-pip-{{ .Branch }}-{{ checksum "requirements.txt" }}-{{ checksum "constraints.txt" }}
+      - run:
+          name: Install dependencies
+          command: |
+            set -x
+
+            python -m venv .venv
+            . ./.venv/bin/activate
+            make install
+      - save_cache:
+          paths:
+            - .venv
+          key: v1-pip-{{ .Branch }}-{{ checksum "requirements.txt" }}-{{ checksum "constraints.txt" }}
+      - run:
+          name: Assume role and save credentials
+          command: |
+            set -x
+
+            source ./envs.sh
+            . ./.venv/bin/activate
+            ./assume.sh
+      - run:
+          name: Create artifacts
+          command: |
+            set -x
+
+            source ./envs.sh
+            . ./.venv/bin/activate
+            make build package AWS_ARTIFACT_BUCKET="$AWS_ARTIFACT_BUCKET"
+      - <<: *persist_to_workspace_envs
+      - <<: *persist_to_workspace_artifacts
+
+  test_unit:
+    <<: *unit_test_container
+    steps:
+      - checkout
+      - attach_workspace:
+          at: *workspace_envs
+      - attach_workspace:
+          at: *workspace_artifacts
+      - restore_cache:
+          keys:
+            - v1-pip-{{ .Branch }}-{{ checksum "requirements.txt" }}-{{ checksum "constraints.txt" }}
+      - run:
+          name: Test unit
+          command: |
+            set -x
+
+            source ./envs.sh
+            . ./.venv/bin/activate
+            make lint test-sam test-unit
+
+  deploy:
+    <<: *guess_build_and_deploy_container
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - v1-pip-{{ .Branch }}-{{ checksum "requirements.txt" }}-{{ checksum "constraints.txt" }}
+      - attach_workspace:
+          at: *workspace_envs
+      - attach_workspace:
+          at: *workspace_artifacts
+      - deploy:
+          name: Deploy AWS SAM
+          command: |
+            set -x
+
+            source ./envs.sh
+            . ./.venv/bin/activate
+            make deploy AWS_ENV="$AWS_ENV"
+      - run:
+          name: Test e2e
+          command: |
+            set -x
+
+            source ./envs.sh
+            . ./.venv/bin/activate
+            make test-e2e
+
+workflows:
+  version: 2
+  aws_sam_ci_cd_workflow:
+    jobs:
+      - guess_and_save_envs:
+          filters:
+            tags:
+              only: /.*/
+      - build:
+          requires:
+            - guess_and_save_envs
+          filters:
+            tags:
+              only: /.*/
+      - test_unit:
+          requires:
+            - build
+          filters:
+            tags:
+              only: /.*/
+      - deploy:
+          requires:
+            - test_unit
+          filters:
+            branches:
+              only:
+                - master
+            tags:
+              only: /v([0-9]+\.){2}[0-9]/
